@@ -7,91 +7,95 @@ using System.Linq;
 using UnityEngine;
 namespace Oxide.Plugins
 {
-    [Info("TeleportDoors", "bmgjet", "1.0.0")]
-    [Description("Using this door will take you to its teleport location")]
+    [Info("TeleportDoors", "bmgjet", "1.0.1")]
+    [Description("Using this door/button will take you to its teleport location")]
     public class TeleportDoors : RustPlugin
     {
-        private class TPDoor { public Vector3 TPLocation; public string Name = "Going To New Zone"; }
         [PluginReference]
         private Plugin Vanish;
-        Dictionary<Door, TPDoor> _TeleportDoors = new Dictionary<Door, TPDoor>();
+        public const string permUse = "TeleportDoors.use"; 
+        private class TPEntity { public Vector3 TPLocation; public string Name = "Going To New Zone"; public string CMD = ""; public string SFX = ""; }
+        Dictionary<BaseEntity, TPEntity> _TPEntity = new Dictionary<BaseEntity, TPEntity>();
+        private void Init(){permission.RegisterPermission(permUse, this);}
         private void OnServerInitialized(bool initial) { if (initial) { Fstartup(); return; } Startup(); }
         private bool IsInvisible(BasePlayer player) { return Vanish != null && Vanish.Call<bool>("IsInvisible", player); }
         private void Fstartup() { timer.Once(10f, () => { try { if (Rust.Application.isLoading) { Fstartup(); return; } } catch { } Startup(); }); }
         private void Startup()
         {
-            _TeleportDoors.Clear();
-            for (int i = World.Serialization.world.prefabs.Count - 1; i >= 0; i--)
+            _TPEntity.Clear();
+            foreach (PrefabData prefabdata in World.Serialization.world.prefabs)
             {
-                PrefabData prefabdata = World.Serialization.world.prefabs[i];
                 if (prefabdata.category.Contains("TELEPORT="))
                 {
                     string settings = prefabdata.category.Split(':')[1].Replace("\\", "");
-                    Door _foundDoor = FindDoor(prefabdata.position, 1.2f);
-                    if (_foundDoor == null) continue;
-                    if (!_TeleportDoors.ContainsKey(_foundDoor))
+                    BaseEntity _foundTrigger = FindDoor(prefabdata.position, 1.2f);
+                    if (_foundTrigger != null && !_TPEntity.ContainsKey(_foundTrigger) && settings != null)
                     {
-                        if (settings != null)
+                        string[] ParsedSettings = settings.Split('=');
+                        if (ParsedSettings.Count() > 1)
                         {
-                            string[] ParsedSettings = settings.Split('=');
-                            if (ParsedSettings.Count() > 1)
+                            TPEntity DoorSettings = new TPEntity();
+                            string[] Vec = ParsedSettings[1].Split(',');
+                            try { DoorSettings.Name = ParsedSettings[2]; } catch { }
+                            try { DoorSettings.SFX = StringPool.toString[uint.Parse(ParsedSettings[3])]; } catch { }
+                            try { DoorSettings.CMD = ParsedSettings[4]; } catch { }
+                            if (Vec.Count() == 3)
                             {
-                                TPDoor DoorSettings = new TPDoor();
-                                try
-                                {
-                                    string[] Vec = ParsedSettings[1].Split(',');
-                                    try { DoorSettings.Name = ParsedSettings[2]; } catch { }
-                                    if (Vec.Count() == 3)
-                                    {
-                                        DoorSettings.TPLocation = new Vector3(float.Parse(Vec[0]), float.Parse(Vec[1]), float.Parse(Vec[2]));
-                                        _TeleportDoors.Add(_foundDoor, DoorSettings);
-                                        continue;
-                                    }
-                                }
-                                catch { }
-                                Puts("Error parsing custom door @ " + _foundDoor.transform.position.ToString());
+                                DoorSettings.TPLocation = new Vector3(float.Parse(Vec[0]), float.Parse(Vec[1]), float.Parse(Vec[2]));
+                                _TPEntity.Add(_foundTrigger, DoorSettings);
+                                continue;
                             }
+                            Puts("Error parsing teleporter @ " + _foundTrigger.transform.position.ToString());
                         }
                     }
                 }
             }
-            Puts("Found " + _TeleportDoors.Count.ToString() + " Teleport doors");
+            Puts("Found " + _TPEntity.Count.ToString() + " Teleporters");
         }
         private void OnDoorOpened(Door thisdoor, BasePlayer player)
         {
-            if (thisdoor == null || player == null) return;
-            if (_TeleportDoors.ContainsKey(thisdoor)) { Teleport(player, _TeleportDoors[thisdoor]); thisdoor.CloseRequest(); }
+            if (thisdoor == null || player == null || thisdoor.OwnerID != 0 || !permission.UserHasPermission(player.UserIDString, permUse)){ thisdoor.CloseRequest(); return; }
+            if (_TPEntity.ContainsKey(thisdoor)) { Teleport(player, _TPEntity[thisdoor]); thisdoor.Invoke(thisdoor.CloseRequest, 0.5f); }
         }
 
-        private void Teleport(BasePlayer player, TPDoor tpdoor)
+        private void OnButtonPress(PressButton thisbutton, BasePlayer player)
         {
-            if (!player.IsValid()) return;
-            try
+            if (thisbutton == null || player == null || thisbutton.OwnerID != 0 || !permission.UserHasPermission(player.UserIDString, permUse)) return;
+            if (_TPEntity.ContainsKey(thisbutton)) { Teleport(player, _TPEntity[thisbutton]); thisbutton.pressDuration = 0.1f; }
+        }
+
+        private void Teleport(BasePlayer player, TPEntity tpdoor)
+        {
+            if (tpdoor.SFX != "") { Effect.server.Run(tpdoor.SFX, player.transform.position); }
+            player.Invoke(() =>
             {
-                player.EnsureDismounted();
-                if (player.HasParent()) { player.SetParent(null, true, true); }
-                if (player.IsConnected) { player.EndLooting(); StartSleeping(player); }
-                player.RemoveFromTriggers();
-                player.SetServerFall(true);
-                player.SetPlayerFlag(BasePlayer.PlayerFlags.ReceivingSnapshot, true);
-                player.ClientRPCPlayer(null, player, "StartLoading");
-                if (Net.sv.write.Start())
+                try
                 {
-                    Net.sv.write.PacketID(Message.Type.Message);
-                    Net.sv.write.String(tpdoor.Name);
-                    Net.sv.write.String("");
-                    Net.sv.write.Send(new SendInfo(player.Connection));
+                    player.EnsureDismounted();
+                    if (player.HasParent()) { player.SetParent(null, true, true); }
+                    if (player.IsConnected) { player.EndLooting(); StartSleeping(player); }
+                    player.RemoveFromTriggers();
+                    player.SetServerFall(true);
+                    player.SetPlayerFlag(BasePlayer.PlayerFlags.ReceivingSnapshot, true);
+                    player.ClientRPCPlayer(null, player, "StartLoading");
+                    if (Net.sv.write.Start())
+                    {
+                        Net.sv.write.PacketID(Message.Type.Message);
+                        Net.sv.write.String(tpdoor.Name);
+                        Net.sv.write.String("");
+                        Net.sv.write.Send(new SendInfo(player.Connection));
+                    }
+                    player.Teleport(tpdoor.TPLocation);
+                    player.SendEntityUpdate();
+                    if (!IsInvisible(player)) { player.UpdateNetworkGroup(); player.SendNetworkUpdateImmediate(false); }
                 }
-                player.Teleport(tpdoor.TPLocation);
-                player.SendEntityUpdate();
-                if (!IsInvisible(player)) { player.UpdateNetworkGroup(); player.SendNetworkUpdateImmediate(false); }
-            }
-            finally
-            {
-                player.SetServerFall(false);
-                player.ForceUpdateTriggers();
-                NextTick(() => { Wakeup(player); });
-            }
+                finally
+                {
+                    player.SetServerFall(false);
+                    player.ForceUpdateTriggers();
+                    NextTick(() => { Wakeup(player, tpdoor); });
+                }
+            }, 0.5f);
         }
 
         private void StartSleeping(BasePlayer player)
@@ -102,25 +106,30 @@ namespace Oxide.Plugins
                 player.SetPlayerFlag(BasePlayer.PlayerFlags.Sleeping, true);
                 player.sleepStartTime = Time.time;
                 BasePlayer.sleepingPlayerList.Add(player);
-                BasePlayer.bots.Remove(player);
                 player.CancelInvoke("InventoryUpdate");
                 player.CancelInvoke("TeamUpdate");
                 player.SendNetworkUpdateImmediate();
             }
         }
 
-        private void Wakeup(BasePlayer player)
+        private void Wakeup(BasePlayer player, TPEntity tpdoor)
         {
             if (player.IsConnected == false) return;
-            if (player.IsReceivingSnapshot == true) { timer.Once(1f, () => Wakeup(player)); return; }
+            if (player.IsReceivingSnapshot == true) { timer.Once(1f, () => Wakeup(player, tpdoor)); return; }
+            if (tpdoor.CMD != "") { string CMD = tpdoor.CMD.Replace("$player", player.displayName).Replace("$steamid", player.OwnerID.ToString()); covalence.Server.Command(CMD); }
             player.EndSleeping();
         }
-        Door FindDoor(Vector3 pos, float radius)
+        BaseEntity FindDoor(Vector3 pos, float radius)
         {
-            List<Door> ScanArea = new List<Door>();
+            List<BaseEntity> ScanArea = new List<BaseEntity>();
             Vis.Entities(pos, radius, ScanArea);
-            if (ScanArea.Count == 0){Vis.Entities(pos + new Vector3(0, 3, 0), radius, ScanArea);}
-            if (ScanArea.Count != 0){return ScanArea[0];}
+            foreach(BaseEntity be in ScanArea)
+            {
+                if (be is Door || be is PressButton)
+                    return be;
+            }
+            Vis.Entities(pos + new Vector3(0, 3, 0), radius, ScanArea);
+            if (ScanArea.Count != 0 && ScanArea[0] is Door) { return ScanArea[0]; }
             return null;
         }
     }
