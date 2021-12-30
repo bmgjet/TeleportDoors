@@ -18,10 +18,11 @@ namespace Oxide.Plugins
         Dictionary<BaseEntity, TPEntity> _TPEntity = new Dictionary<BaseEntity, TPEntity>();
         private void Init() { permission.RegisterPermission(permUse, this); }
         private void OnServerInitialized(bool initial) { if (initial) { Fstartup(); return; } Startup(); }
+        object OnPlayerRespawn(BasePlayer player) { player.ClientRPCPlayer(null, player, "StartLoading"); AdjustConnectionScreen(player, "Loading"); player.SetPlayerFlag(BasePlayer.PlayerFlags.ReceivingSnapshot, true); player.SendEntityUpdate(); return null; }
         private bool IsInvisible(BasePlayer player) { return Vanish != null && Vanish.Call<bool>("IsInvisible", player); }
         private void AdjustConnectionScreen(BasePlayer player, string msg) { if (Net.sv.write.Start()) { Net.sv.write.PacketID(Message.Type.Message); Net.sv.write.String(msg); Net.sv.write.Send(new SendInfo(player.Connection)); } }
-        private void OnDoorOpened(Door thisdoor, BasePlayer player) { if (thisdoor == null || player == null || thisdoor.OwnerID != 0 || !permission.UserHasPermission(player.UserIDString, permUse)) { thisdoor.CloseRequest(); return; } if (_TPEntity.ContainsKey(thisdoor)) { Teleport(player, _TPEntity[thisdoor]); thisdoor.Invoke(thisdoor.CloseRequest, 0.5f); } }
-        private void OnButtonPress(PressButton thisbutton, BasePlayer player) { if (thisbutton == null || player == null || thisbutton.OwnerID != 0 || !permission.UserHasPermission(player.UserIDString, permUse)) return; if (_TPEntity.ContainsKey(thisbutton)) { Teleport(player, _TPEntity[thisbutton]); thisbutton.pressDuration = 0.1f; } }
+        private void OnDoorOpened(Door thisdoor, BasePlayer player) {if (thisdoor == null || player == null || thisdoor.OwnerID != 0) { return; }if (_TPEntity.ContainsKey(thisdoor) && permission.UserHasPermission(player.UserIDString, permUse)){Teleport(player, _TPEntity[thisdoor]); thisdoor.Invoke(thisdoor.CloseRequest, 0.5f); return; }if(_TPEntity.ContainsKey(thisdoor))thisdoor.CloseRequest();}
+        private void OnButtonPress(PressButton thisbutton, BasePlayer player) { if (thisbutton == null || player == null || thisbutton.OwnerID != 0) { return; } if (_TPEntity.ContainsKey(thisbutton) && permission.UserHasPermission(player.UserIDString, permUse)) { Teleport(player, _TPEntity[thisbutton]); thisbutton.pressDuration = 0.1f; } }
         private void Fstartup() { timer.Once(10f, () => { try { if (Rust.Application.isLoading) { Fstartup(); return; } } catch { } Startup(); }); }
         private void Startup()
         {
@@ -30,7 +31,7 @@ namespace Oxide.Plugins
             {
                 if (!prefabdata.category.Contains("TELEPORT=")) { continue; }
                 string settings = prefabdata.category.Split(':')[1].Replace("\\", "");
-                BaseEntity _foundTrigger = FindDoor(prefabdata.position, 1.2f);
+                BaseEntity _foundTrigger = FindDoor(prefabdata.position, 1.4f);
                 if (_foundTrigger == null || _TPEntity.ContainsKey(_foundTrigger) || settings == null) { return; }
                 string[] ParsedSettings = settings.Split('=');
                 if (ParsedSettings.Count() > 1)
@@ -49,6 +50,7 @@ namespace Oxide.Plugins
 
         private void Teleport(BasePlayer player, TPEntity tpdoor)
         {
+            if (!player.IsValid() || Vector3.Distance(tpdoor.TPLocation, default(Vector3)) < 5f) return;
             if (tpdoor.SFX != "") { Effect.server.Run(tpdoor.SFX, player.transform.position); }
             player.Invoke(() =>
             {
@@ -60,8 +62,8 @@ namespace Oxide.Plugins
                     player.RemoveFromTriggers();
                     player.SetServerFall(true);
                     AdjustConnectionScreen(player, tpdoor.Name);
-                    player.SetPlayerFlag(BasePlayer.PlayerFlags.ReceivingSnapshot, true);
                     player.ClientRPCPlayer(null, player, "StartLoading");
+                    player.SetPlayerFlag(BasePlayer.PlayerFlags.ReceivingSnapshot, true);
                     player.Teleport(tpdoor.TPLocation);
                     player.SendEntityUpdate();
                     if (!IsInvisible(player)) { player.UpdateNetworkGroup(); player.SendNetworkUpdateImmediate(false); }
@@ -94,15 +96,14 @@ namespace Oxide.Plugins
             if (player.IsConnected == false) return;
             if (player.IsReceivingSnapshot == true) { timer.Once(1f, () => Wakeup(player, tpdoor)); return; }
             if (tpdoor.CMD != "") { string CMD = tpdoor.CMD.Replace("$player", player.displayName).Replace("$steamid", player.OwnerID.ToString()); covalence.Server.Command(CMD); }
-            AdjustConnectionScreen(player, "Loading");
-            NextTick(() => { player.EndSleeping(); });
+            player.EndSleeping();
         }
 
         BaseEntity FindDoor(Vector3 pos, float radius)
         {
             List<BaseEntity> ScanArea = new List<BaseEntity>();
             Vis.Entities(pos, radius, ScanArea);
-            foreach (BaseEntity be in ScanArea){if (be is Door || be is PressButton)return be;}
+            foreach (BaseEntity be in ScanArea) { if (be is Door || be is PressButton) return be; }
             Vis.Entities(pos + new Vector3(0, 3, 0), radius, ScanArea);
             if (ScanArea.Count != 0 && ScanArea[0] is Door) { return ScanArea[0]; }
             return null;
