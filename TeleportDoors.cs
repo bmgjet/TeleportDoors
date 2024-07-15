@@ -8,7 +8,7 @@ using UnityEngine;
 
 namespace Oxide.Plugins
 {
-    [Info("TeleportDoors", "bmgjet", "1.0.4")]
+    [Info("TeleportDoors", "bmgjet", "1.0.5")]
     [Description("Using this door/button will take you to its teleport location")]
     public class TeleportDoors : RustPlugin
     {
@@ -21,16 +21,16 @@ namespace Oxide.Plugins
         private void OnServerInitialized(bool initial) { if (initial) { Fstartup(); return; } Startup(); }
         object OnPlayerRespawn(BasePlayer player) { player.ClientRPCPlayer(null, player, "StartLoading_Quick"); AdjustConnectionScreen(player, "Loading"); player.SetPlayerFlag(BasePlayer.PlayerFlags.ReceivingSnapshot, true); player.SendEntityUpdate(); return null; }
         private bool IsInvisible(BasePlayer player) { return Vanish != null && Vanish.Call<bool>("IsInvisible", player); }
-        private void AdjustConnectionScreen(BasePlayer player, string msg) 
+        private void AdjustConnectionScreen(BasePlayer player, string msg)
         {
             if (!Network.Net.sv.IsConnected())
             {
                 return;
             }
             NetWrite netWrite = Network.Net.sv.StartWrite();
-            netWrite.PacketID(Message.Type.Message); 
+            netWrite.PacketID(Message.Type.Message);
             netWrite.String(msg);
-            netWrite.Send(new SendInfo(player.Connection)); 
+            netWrite.Send(new SendInfo(player.Connection));
         }
 
         private void OnDoorOpened(Door thisdoor, BasePlayer player) { if (thisdoor == null || player == null || thisdoor.OwnerID != 0) { return; } if (_TPEntity.ContainsKey(thisdoor) && permission.UserHasPermission(player.UserIDString, permUse)) { Teleport(player, _TPEntity[thisdoor]); thisdoor.Invoke(thisdoor.CloseRequest, 0.5f); return; } if (_TPEntity.ContainsKey(thisdoor)) thisdoor.CloseRequest(); }
@@ -127,7 +127,7 @@ namespace Oxide.Plugins
 
         BaseEntity FindDoor(Vector3 pos, float radius)
         {
-            foreach (BaseNetworkable baseNetworkable in BaseNetworkable.serverEntities.entityList.Values)
+            foreach (BaseNetworkable baseNetworkable in BaseNetworkable.serverEntities)
             {
                 if ((baseNetworkable is Door || baseNetworkable is PressButton) && baseNetworkable.transform.position == pos)
                 {
